@@ -1,0 +1,4 @@
+jwave @ git+https://github.com/ucl-bug/jwave.git#egg=jwave
+matplotlib
+jupyterlab
+tqdm
