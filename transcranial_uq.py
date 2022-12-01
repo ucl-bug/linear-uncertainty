@@ -221,6 +221,3 @@ plt.close()
 # Save fields
 mdic = {"pressure": mu_linear, "cov": cov_linear, "cov_mc": cov_mc}
 savemat("mc_500k/uq_large.mat", mdic)
-
-## Plane trough the focus
-# Save x-y and x-z
