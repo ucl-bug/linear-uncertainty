@@ -20,10 +20,10 @@ from scipy.io import loadmat, savemat
 from luprox import linear_uncertainty, mc_uncertainty
 
 ## Settings
-src_file = "SC1_coarse.mat"
-bg_sos_file = "background_sound_speed.mat"
-density_file = "density.mat"
-skull_mask = "skull_mask.mat"
+src_file = "matfiles/SC1_coarse.mat"
+bg_sos_file = "matfiles/background_sound_speed.mat"
+density_file = "matfiles/density.mat"
+skull_mask = "matfiles/skull_mask.mat"
 
 c0 = 1500.0
 f0 = 0.5e6
