@@ -17,3 +17,5 @@ To reproduce the results, run:
 ```bash
 python transcranial_uq.py
 ```
+
+To generate the figures, open and run the notebook `Figures.ipynb`.
