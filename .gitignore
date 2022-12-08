@@ -1,2 +1,12 @@
-*.mat
+# Internal files
+Simulation.mat
+uq.mat
+sos.mat
+skull_6ppw.mat
+simulation.mat
+
+# Monte carlo runs
+mc_500k/*.mat
+
+# Jupyter
 .ipynb_checkpoints
