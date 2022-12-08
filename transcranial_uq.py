@@ -1,12 +1,8 @@
-# Import required packages
+## Import required packages
 import matplotlib.font_manager as fm
 import numpy as np
-
-# LUPROX
-from jax import eval_shape, grad, jacfwd, jacrev, jit, lax, nn
 from jax import numpy as jnp
-from jax import random, value_and_grad, vmap
-from jax.example_libraries import optimizers
+from jax import random, jit
 from jwave import FourierSeries
 from jwave.acoustics import simulate_wave_propagation
 from jwave.geometry import (
@@ -14,21 +10,18 @@ from jwave.geometry import (
     Domain,
     Medium,
     Sensors,
-    Sources,
     TimeAxis,
-    _circ_mask,
-    _points_on_circle,
 )
-from jwave.signal_processing import analytic_signal, apply_ramp, gaussian_window, smooth
-from luprox import linear_uncertainty, mc_uncertainty
+from jwave.signal_processing import apply_ramp
 from matplotlib import pyplot as plt
 from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
 from scipy.io import loadmat, savemat
-from tqdm import tqdm
 
-# Settings
+from luprox import linear_uncertainty, mc_uncertainty
+
+## Settings
 src_file = "SC1_coarse.mat"
-sos_file = "sos.mat"
+bg_sos_file = "background_sound_speed.mat"
 density_file = "density.mat"
 skull_mask = "skull_mask.mat"
 
@@ -36,37 +29,37 @@ c0 = 1500.0
 f0 = 0.5e6
 ppw = 6
 cfl = 0.3
+dx = 0.0005
 
 # Previously evaluated in MATLAB
 c_mean = 2480.9
 d_mean = 1782.5
 
-# Slope values
-alpha = 1.333
-alpha_std = 0.168
-beta = 0  # 104.9
-beta_std = 18.8  # 298.35
-
-# c = alpha*HU + beta
+alpha = 1.333  # Slope values
+alpha_std = 0.168  # Slope std
+beta = 0  # Beta value
+beta_std = 18.8  # Beta std
 
 # Load data
 src_mat = loadmat(src_file)
-sos_mat = loadmat(sos_file)
+bg_sos_mat = loadmat(bg_sos_file)
 density_mat = loadmat(density_file)
 skull_mat = loadmat(skull_mask)
 
 # Extracting fields
-src_bli = jnp.asarray(src_mat["src_field"], dtype=jnp.float32)[29:-29]
-sound_speed = jnp.asarray(sos_mat["sound_speed"], dtype=jnp.float32)
+src_bli = jnp.asarray(src_mat["src_field"], dtype=jnp.float32)[
+    29:-29
+]  # Trim as source has different size
+bg_sound_speed = jnp.asarray(bg_sos_mat["sound_speed"], dtype=jnp.float32)
 density = jnp.asarray(density_mat["density"], dtype=jnp.float32)
 skull_mask = jnp.asarray(skull_mat["skull_mask"], dtype=jnp.float32)
 skull_density = skull_mask * density
 
-# Prepare
-bg_sos = sound_speed * (1 - skull_mask)
+# Prepare background sound speed (remove skull region)
+bg_sos = bg_sound_speed * (1 - skull_mask)
 
 # Pad medium fields for PML
-sound_speed = jnp.pad(sound_speed, ((20, 21), (20, 21), (20, 21)), mode="edge")
+bg_sound_speed = jnp.pad(bg_sound_speed, ((20, 21), (20, 21), (20, 21)), mode="edge")
 bg_sos = jnp.pad(bg_sos, ((20, 21), (20, 21), (20, 21)), mode="edge")
 density = jnp.pad(density, ((20, 21), (20, 21), (20, 21)), mode="edge")
 src_bli = jnp.pad(src_bli, ((10, 10), (10, 10), (10, 10)), mode="edge")
@@ -74,26 +67,21 @@ skull_density = jnp.pad(skull_density, ((20, 21), (20, 21), (20, 21)), mode="edg
 skull_mask = jnp.pad(skull_mask, ((20, 21), (20, 21), (20, 21)), mode="edge")
 
 # Define domain
-N = sound_speed.shape
-c0 = c0
+N = bg_sound_speed.shape
 source_f0 = f0
-ppw = ppw
-dx = 0.0005  # c0 / (ppw * source_f0)
 dx = [dx] * len(N)
 
 domain = Domain(N, dx)
 
 # Make into fourier fields
 src_bli = jnp.expand_dims(src_bli, -1)
-sound_speed = FourierSeries(sound_speed, domain)
+bg_sound_speed = FourierSeries(bg_sound_speed, domain)
 src_field = FourierSeries(src_bli, domain)
 density = FourierSeries(density, domain)
 
 # Define medium
-medium = Medium(domain=domain, sound_speed=sound_speed, pml_size=20)
+medium = Medium(domain=domain, sound_speed=bg_sound_speed, pml_size=20)
 time_axis = TimeAxis.from_medium(medium, cfl=cfl)
-# time_axis.t_end = time_axis.t_end / 2
-print(len(time_axis.to_array()))
 
 # Define source term
 source_mag = 1.0
@@ -106,7 +94,6 @@ transducer = DistributedTransducer(
 )
 
 # Define sensor plane
-# Change this to the plane passing trough the focus
 x = np.arange(282)
 y = 182 // 2
 z = np.arange(182)
@@ -114,18 +101,8 @@ x, y, z = np.meshgrid(x, y, z)
 x = x.flatten()
 y = y.flatten()
 z = z.flatten()
-"""
-x = np.arange(120,160)
-y = np.arange(70,110)
-z = np.arange(70,110)
-x, y, z = np.meshgrid(x,y,z)
-x = x.flatten()
-y = y.flatten()
-z = z.flatten()
-"""
 
-sensors_positions = (x, y, z)
-sensors = Sensors(positions=sensors_positions)
+sensors = Sensors(positions=(x, y, z))
 
 # Define simulation function
 @jit
@@ -140,38 +117,49 @@ def simulate_sos(sound_speed):
 
 @jit
 def get_field(values, skull_density, skull_mask, bg_sos):
+    # Extract the parameters
     alpha, beta = values
 
+    # Center skull density
     skull_density = skull_density - d_mean
+
+    # Apply the linear model
     skull_sos = skull_mask * (skull_density * alpha + beta + c_mean)
 
+    # Add background sound speed
     sos = skull_sos + bg_sos
 
+    # Make it a field and simulate
     sos = FourierSeries(sos, domain)
-
     p = simulate_sos(sos)
+
+    # Reshape output into a sequence of planes
     p = np.reshape(p, (-1, 282, 182))
+
+    # Take the maximum after the initial transient
     p_max = jnp.max(jnp.abs(p[1400:]), axis=0)
     return p_max
 
 
+# Test the function (and compiles it)
 pressure = get_field(jnp.asarray([alpha, beta]), skull_density, skull_mask, bg_sos)
 
-
+# Define mean and covariance
 covariance = jnp.array([[alpha_std, 0], [0, beta_std]]) ** 2
 x = jnp.array([alpha, beta])
 
+# Transform function using linear uncertainty propagation
 get_field_lup = linear_uncertainty(get_field)
 
-# Calculate uncertainty
+# Calculate linear uncertainty
 mu_linear, cov_linear = get_field_lup(x, covariance, skull_density, skull_mask, bg_sos)
-# cov_linear = cov_linear *jnp.sqrt(2)
-print(mu_linear)
 
-# Monte carlo covariance
+# Do the same using Monte Carlo (200 runs)
 key = random.PRNGKey(43)
 get_field_mc = mc_uncertainty(get_field, 200)
 mu_mc, cov_mc = get_field_mc(x, covariance, key, skull_density, skull_mask, bg_sos)
+
+# ---------------------------
 
 # Make figure
 fig, ax = plt.subplots(2, 2, figsize=(7, 6), dpi=400)

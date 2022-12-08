@@ -1,11 +1,28 @@
-from typing import Any, Callable, Dict
+from typing import Callable
+
+from jax import eval_shape, jacfwd, jit
 from jax import numpy as jnp
-from jax import jacfwd, jacrev, vmap, jit, random, eval_shape
+from jax import random
 from scipy.io import savemat
 
 
 def linear_uncertainty(fun: Callable):
-    """See Measurements.jl in https://mitmath.github.io/18337/lecture19/uncertainty_programming"""
+    """Decorator to transform a function to return mean and covariance of output,
+    using linear uncertainty propagation.
+
+    See Measurements.jl in https://mitmath.github.io/18337/lecture19/uncertainty_programming
+
+    Uncertainty propagation is only done for the first argument of the function,
+    which is assumed to be a 1D array. The signature of the output function is
+    `fun_with_uncertainty(mean, covariance, *args, **kwargs)`. Internally, the
+    input function `fun` is called as `fun(mean, *args, **kwargs)`.
+
+    Args:
+        fun (Callable): Function to be transformed
+
+    Returns:
+        Callable: Transformed function
+    """
 
     def fun_with_uncertainty(mean, covariance, *args, **kwargs):
         mean = mean.real
@@ -37,6 +54,25 @@ def linear_uncertainty(fun: Callable):
 
 
 def monte_carlo(fun: Callable, trials, verbose=False, save_samples=True):
+    """Decorator to transform a function to return mean and covariance of output,
+    using Monte Carlo sampling.
+
+    Uncertainty propagation is only done for the first argument of the function,
+    which is assumed to be a 1D array. The signature of the output function is
+    `fun_with_uncertainty(mean, covariance, key, *args, **kwargs)`. Internally, the
+    input function `fun` is called as `fun(mean, *args, **kwargs)`.
+    The key is used to generate random numbers for Monte Carlo sampling.
+
+    Args:
+        fun (Callable): Function to be transformed
+        trials (int): Number of Monte Carlo trials
+        verbose (bool, optional): Print progress. Defaults to False.
+        save_samples (bool, optional): Save samples in .mat files. Defaults to True.
+
+    Returns:
+        Callable: Transformed function
+    """
+
     def sampling_function(mean, covariance, key, *args, **kwargs):
         keys = random.split(key, trials)
 
